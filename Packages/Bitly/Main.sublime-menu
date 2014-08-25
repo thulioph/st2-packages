@@ -1,0 +1,10 @@
+[{
+	"id": "tools",
+	"children": [{
+		"id": "Packages"
+	}, {
+		"command": "bitly_shorten"
+	}, {
+		"command": "bitly_expand"
+	}]
+}]

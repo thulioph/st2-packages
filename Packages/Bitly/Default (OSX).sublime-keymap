@@ -1,0 +1,4 @@
+[  
+    { "keys": ["super+alt+b"], "command": "bitly_shorten" },
+    { "keys": ["super+alt+e"], "command": "bitly_expand" }
+]  

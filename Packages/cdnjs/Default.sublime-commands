@@ -1,0 +1,18 @@
+[
+    {
+        "caption": "Cdnjs: Import Script",
+        "command": "cdnjs"
+    },
+    {
+        "caption": "Cdnjs: Import URL only",
+        "command": "cdnjs_url"
+    },
+    {
+        "caption": "Cdnjs: Import Entire File",
+        "command": "cdnjs_file"
+    },
+    {
+        "caption": "Cdnjs: Search",
+        "command": "cdnjs_search"
+    }
+]

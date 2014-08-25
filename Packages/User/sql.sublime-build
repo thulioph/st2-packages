@@ -1,0 +1,4 @@
+{
+    "cmd": ["mysql", "-u", "root", "-e", "source $file"],
+    "selector": "source.sql"
+}

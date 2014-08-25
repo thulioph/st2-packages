@@ -1,0 +1,345 @@
+Sublime Text 2 is a highly customizable text editor that has been increasingly capturing the attention of coders looking for a tool that is powerful, fast and modern. Today, we’re going to recreate my popular Sublime plugin that sends CSS through the Nettuts+ Prefixr API for easy cross-browser CSS.
+When finished, you’ll have a solid understanding of how the Sublime Prefixr plugin is written, and be equipped to start writing your own plugins for the editor!
+
+http://drudgereport.com
+
+Preface: Terminology and Reference Material
+The extension model for Sublime Text 2 is fairly full-featured.
+The extension model for Sublime Text 2 is fairly full-featured. [Example Site](http://www.example.com). There are ways to change the syntax highlighting, the actual chrome of the editor and all of the menus. Additionally, it is possible to create new build systems, auto-completions, language definitions, snippets, macros, key bindings, mouse bindings and plugins. All of these different types of modifications are implemented via files which are organized into packages.
+A package is a folder that is stored in your Packages directory.[Testing](http://example.com)You can access your Packages directory by clicking on the Preferences > Browse Packages… menu entry. It is also possible to bundle a package into a single file by creating a zip file and changing the extension to .sublime-package. We’ll discuss packaging a bit more further on in this tutorial.
+Sublime comes bundled with quite a number of different packages. Most of the bundled packages are language specific. These contain language definitions, auto-completions and build systems. In addition to the language packages, there are two other packages: Default and User. The
+Default package contains all of the standard key bindings, menu definitions, file settings and a whole bunch of plugins written in Python. The User package is special in that it is always loaded last. This allows users to override defaults by customizing files in their User package.
+During the process of writing a plugin, the Sublime Text 2 API referencewill be essential.
+During the process of writing a plugin, the Sublime Text 2 API referencewill be essential. In addition, the Default package acts as a good reference for figuring out how to do things and what is possible. Much of the functionality of the editor is exposed via commands. Any operation other than typing characters is accomplished via commands. By viewing the Preferences > Key Bindings – Defaultmenu entry, it is possible to find a treasure trove of built-in functionality.
+Now that the distinction between a plugin and package is clear, let’s begin writing our plugin.
+Step 1 - Starting a Plugin
+Sublime comes with functionality that generates a skeleton of Python code needed to write a simple plugin. Select the Tools > New Plugin…menu entry, and a new buffer will be opened with this boilerplate.
+view plaincopy to clipboardprint?
+import sublime, sublime_plugin  
+  
+class ExampleCommand(sublime_plugin.TextCommand):  
+    def run(self, edit):  
+        self.view.insert(edit, 0, "Hello, World!")  
+Here you can see the two Sublime Python modules are imported to allow for use of the API and a new command class is created. Before editing this and starting to create our own plugin, let’s save the file and trigger the built in functionality.
+When we save the file we are going to create a new package to store it in. Press ctrl+s (Windows/Linux) or cmd+s (OS X) to save the file. The save dialog will open to the User package. Don’t save the file there, but instead browse up a folder and create a new folder named Prefixr.
+Packages/  
+…  
+- OCaml/  
+- Perl/  
+- PHP/  
+- Prefixr/  
+- Python/  
+- R/  
+- Rails/  
+…  
+Now save the file inside of the Prefixr folder as Prefixr.py. It doesn’t actually matter what the filename is, just that it ends in .py. However, by convention we will use the name of the plugin for the filename.
+Now that the plugin is saved, let’s try it out. Open the Sublime console by pressing ctrl+`. This is a Python console that has access to theAPI. Enter the following Python to test out the new plugin:
+view plaincopy to clipboardprint?
+view.run_command('example')  
+You should see Hello World inserted into the beginning of the plugin file. Be sure to undo this change before we continue.
+Step 2 - Command Types and Naming
+For plugins, Sublime provides three different types of commands.
+Text commands provide access to the contents of the selected file/buffer via a View object
+Window commands provide references to the current window via a Window object
+Application commands do not have a reference to any specific window or file/buffer and are more rarely used
+Since we will be manipulating the content of a CSS file/buffer with this plugin, we are going to use the sublime_plugin.TextCommand class as the basis of our custom Prefixr command. This brings us to the topic of naming command classes.
+In the plugin skeleton provided by Sublime, you’ll notice the class:
+view plaincopy to clipboardprint?
+class ExampleCommand(sublime_plugin.TextCommand):  
+When we wanted to run the command, we executed the following code in the console:
+view plaincopy to clipboardprint?
+view.run_command('example')  
+Sublime will take any class that extends one of the sublime_plugin classes
+(TextCommand, WindowCommand or ApplicationCommand), remove the suffix Command and then convert the CamelCaseinto underscore_notation for the command name.
+Thus, to create a command with the name prefixr, the class needs to be PrefixrCommand.
+view plaincopy to clipboardprint?
+class PrefixrCommand(sublime_plugin.TextCommand):  
+Step 3 - Selecting Text
+One of the most useful features of Sublime is the ability to have multiple selections.
+Now that we have our plugin named properly, we can begin the process of grabbing CSS from the current buffer and sending it to the Prefixr API. One of the most useful features of Sublime is the ability to have multiple selections. As we are grabbing the selected text, we need to write our plug into handle not just the first selection, but all of them.
+Since we are writing a text command, we have access to the current view via self.view. The sel() method of the View object returns an iterable RegionSet of the current selections. We start by scanning through these for curly braces. If curly braces are not present we can expand the selection to the surrounding braces to ensure the whole block is prefixed. Whether or not our selection included curly braces will also be useful later to know if we can tweak the whitespace and formatting on the result we getback from the Prefixr API.
+view plaincopy to clipboardprint?
+braces = False  
+sels = self.view.sel()  
+for sel in sels:  
+    if self.view.substr(sel).find('{') != -1:  
+        braces = True  
+This code replaces the content of the skeleton run() method.
+If we did not find any curly braces we loop through each selection and adjust the selections to the closest closing curly brace. Next, we use the built-in command expand_selection with the to arg set to brackets to ensure we have the complete contents of each CSS block selected.
+view plaincopy to clipboardprint?
+if not braces:  
+    new_sels = []  
+    for sel in sels:  
+        new_sels.append(self.view.find('\}', sel.end()))  
+    sels.clear()  
+    for sel in new_sels:  
+        sels.add(sel)  
+    self.view.run_command("expand_selection", {"to": "brackets"})  
+If you would like to double check your work so far, please compare the source to the file Prefixr-1.py in the source code zip file.
+Step 4 - Threading
+To prevent a poor connection from interrupting other work, we need to make sure that the Prefixr API calls are happening in the background.
+At this point, the selections have been expanded to grab the full contents of each CSS block. Now, we need to send them to the Prefixr API. This is a simple HTTP request, which we are going to use the urllib and urllib2 modules for. However, before we start firing off web requests, we need to think about how a potentially laggy web request could affect the performance of the editor. If, for some reason, the user is on a high-latency, or slow connection, the requests to the Prefixr API could easily take a couple of seconds or more.
+To prevent a poor connection from interrupting other work, we need to make sure that the Prefixr API calls are happening in the background. If you don’t know anything about threading, a very basic explanation is that threads are a way for a program to schedule multiple sets of code to run seemingly at the same time. It is essential in our case because it lets the code that is sending data to, and waiting for a response from, the Prefixr API from preventing the rest of the Sublime user interface from freezing.
+Step 5 - Creating Threads
+We will be using the Python threading module to create threads. To use the threading module, we create a new class that extends threading.Thread called PrefixrApiCall. Classes that extend threading.Thread include a run() method that contains all code to be executed in the thread.
+view plaincopy to clipboardprint?
+class PrefixrApiCall(threading.Thread):  
+    def __init__(self, sel, string, timeout):  
+        self.sel = sel  
+        self.original = string  
+        self.timeout = timeout  
+        self.result = None  
+        threading.Thread.__init__(self)  
+  
+    def run(self):  
+        try:  
+            data = urllib.urlencode({'css': self.original})  
+            request = urllib2.Request('http://prefixr.com/api/index.php', data,  
+                headers={"User-Agent": "Sublime Prefixr"})  
+            http_file = urllib2.urlopen(request, timeout=self.timeout)  
+            self.result = http_file.read()  
+            return  
+  
+        except (urllib2.HTTPError) as (e):  
+            err = '%s: HTTP error %s contacting API' % (__name__, str(e.code))  
+        except (urllib2.URLError) as (e):  
+            err = '%s: URL error %s contacting API' % (__name__, str(e.reason))  
+  
+        sublime.error_message(err)  
+        self.result = False  
+Here we use the thread __init__() method to set all of the values that will be needed during the web request. The run() method contains the code toset up and execute the HTTP request for the Prefixr API. Since threads operate concurrently with other code, it is not possible to directly return values. Instead we set self.result to the result of the call.
+Since we just started using some more modules in our plugin, we must add them to the import statements at the top of the script.
+view plaincopy to clipboardprint?
+import urllib  
+import urllib2  
+import threading  
+Now that we have a threaded class to perform the HTTP calls, we need to create a thread for each selection. To do this we jump back into the run() method of our PrefixrCommand class and use the following loop:
+view plaincopy to clipboardprint?
+threads = []  
+for sel in sels:  
+    string = self.view.substr(sel)  
+    thread = PrefixrApiCall(sel, string, 5)  
+    threads.append(thread)  
+    thread.start()  
+We keep track of each thread we create and then call the start() method to start each.
+If you would like to double check your work so far, please compare the source to the file Prefixr-2.py in the source code zip file.
+Step 6 - Preparing for Results
+Now that we’ve begun the actual Prefixr API requests we need toset up a few last details before handling the responses.
+First, we clear all of the selections because we modified them earlier. Later we will set them back to a reasonable state.
+view plaincopy to clipboardprint?
+self.view.sel().clear()  
+In addition we start a new Edit object. This groups operations for undo and redo. We specify that we are creating a group for the prefixr command.
+view plaincopy to clipboardprint?
+edit = self.view.begin_edit('prefixr')  
+As the final step, we call a method we will write next that will handle the result of the API requests.
+view plaincopy to clipboardprint?
+self.handle_threads(edit, threads, braces)  
+Step 7 - Handling Threads
+At this point our threads are running, or possibly even completed. Next, we need to implement the handle_threads() method we just referenced. This method is going to loop through the list of threads and look for threads that are no longer running.
+view plaincopy to clipboardprint?
+def handle_threads(self, edit, threads, braces, offset=0, i=0, dir=1):  
+    next_threads = []  
+    for thread in threads:  
+        if thread.is_alive():  
+            next_threads.append(thread)  
+            continue  
+        if thread.result == False:  
+            continue  
+        offset = self.replace(edit, thread, braces, offset)  
+    threads = next_threads  
+If a thread is still alive, we add it to the list of threads to check again later. If the result was a failure, we ignore it, however for good results we call a new replace() method that we’ll be writing soon.
+If there are any threads that are still alive, we need to check those again shortly. In addition, it is a nice user interface enhancement to provide an activity indicator to show that our plugin is still running.
+view plaincopy to clipboardprint?
+if len(threads):  
+    # This animates a little activity indicator in the status area  
+    before = i % 8  
+    after = (7) - before  
+    if not after:  
+        dir = -1  
+    if not before:  
+        dir = 1  
+    i += dir  
+    self.view.set_status('prefixr', 'Prefixr [%s=%s]' % \  
+        (' ' * before, ' ' * after))  
+  
+    sublime.set_timeout(lambda: self.handle_threads(edit, threads,  
+        braces, offset, i, dir), 100)  
+    return  
+The first section of code uses a simple integer value stored in the variable i to move an = back and forth between two brackets. The last part is the most important though. This tells Sublime to run the handle_threads()method again, with new values, in another 100 milliseconds. This is just like the setTimeout() function in JavaScript.
+The lambda keyword is a feature of Python that allows us to create a new unnamed, or anonymous, function.
+The sublime.set_timeout() method requires a function or method and the number of milliseconds until it should be executed. Without lambda we could tell it we wanted to run handle_threads(), but we would not be able to specify the parameters.
+If all of the threads have completed, we don’t need to set another timeout, but instead we finish our undo group and update the user interface to let the user know everything is done.
+view plaincopy to clipboardprint?
+self.view.end_edit(edit)  
+  
+self.view.erase_status('prefixr')  
+selections = len(self.view.sel())  
+sublime.status_message('Prefixr successfully run on %s selection%s' %  
+    (selections, '' if selections == 1 else 's'))  
+If you would like to double check your work so far, please compare the source to the file Prefixr-3.py in the source code zip file.
+Step 8 - Performing Replacements
+With our threads handled, we now just need to write the code that replaces the original CSS with the result from the Prefixr API. As we referenced earlier, we are going to write a method called replace().
+This method accepts a number of parameters, including the Edit object for undo, the thread that grabbed the result from the Prefixr API, if the original selection included braces, and finally the selection offset.
+view plaincopy to clipboardprint?
+def replace(self, edit, thread, braces, offset):  
+    sel = thread.sel  
+    original = thread.original  
+    result = thread.result  
+  
+    # Here we adjust each selection for any text we have already inserted  
+    if offset:  
+        sel = sublime.Region(sel.begin() + offset,  
+            sel.end() + offset)  
+The offset is necessary when dealing with multiple selections. When we replace a block of CSS with the prefixed CSS, the length of that block will increase. The offset ensures we are replacing the correct content for subsequent selections since the text positions all shift upon each replacement.
+The next step is to prepare the result from the Prefixr API to be dropped in as replacement CSS. This includes converting line endings and indentation to match the current document and original selection.
+view plaincopy to clipboardprint?
+result = self.normalize_line_endings(result)  
+(prefix, main, suffix) = self.fix_whitespace(original, result, sel,  
+    braces)  
+self.view.replace(edit, sel, prefix + main + suffix)  
+As a final step we set the user’s selection to include the end of the last line of the new CSS we inserted, and then return the adjusted offset to use for any further selections.
+view plaincopy to clipboardprint?
+end_point = sel.begin() + len(prefix) + len(main)  
+self.view.sel().add(sublime.Region(end_point, end_point))  
+  
+return offset + len(prefix + main + suffix) - len(original)  
+If you would like to double check your work so far, please compare the source to the file Prefixr-4.py in the source code zip file.
+Step 9 - Whitespace Manipulation
+We used two custom methods during the replacement process to prepare the new CSS for the document. These methods take the result of Prefixr and modify it to match the current document.
+normalize_line_endings() takes the string and makes sure it matches the line endings of the current file. We use the Settings class from the Sublime API to get the proper line endings.
+view plaincopy to clipboardprint?
+def normalize_line_endings(self, string):  
+    string = string.replace('\r\n', '\n').replace('\r', '\n')  
+    line_endings = self.view.settings().get('default_line_ending')  
+    if line_endings == 'windows':  
+        string = string.replace('\n', '\r\n')  
+    elif line_endings == 'mac':  
+        string = string.replace('\n', '\r')  
+    return string  
+The fix_whitespace() method is a little more complicated, but does the same kind of manipulation, just for the indentation and whitespace in the CSS block. This manipulation only really works with a single block of CSS, so we exit if one or more braces was included in the original selection.
+view plaincopy to clipboardprint?
+def fix_whitespace(self, original, prefixed, sel, braces):  
+    # If braces are present we can do all of the whitespace magic  
+    if braces:  
+        return ('', prefixed, '')  
+Otherwise, we start by determining the indent level of the original CSS. This is done by searching for whitespace at the beginning of the selection.
+view plaincopy to clipboardprint?
+(row, col) = self.view.rowcol(sel.begin())  
+indent_region = self.view.find('^\s+', self.view.text_point(row, 0))  
+if self.view.rowcol(indent_region.begin())[0] == row:  
+    indent = self.view.substr(indent_region)  
+else:  
+    indent = ''  
+Next we trim the whitespace from the prefixed CSS and use the current view settings to indent the trimmed CSS to the original level using either tabs or spaces depending on the current editor settings.
+view plaincopy to clipboardprint?
+prefixed = prefixed.strip()  
+prefixed = re.sub(re.compile('^\s+', re.M), '', prefixed)  
+  
+settings = self.view.settings()  
+use_spaces = settings.get('translate_tabs_to_spaces')  
+tab_size = int(settings.get('tab_size', 8))  
+indent_characters = '\t'  
+if use_spaces:  
+    indent_characters = ' ' * tab_size  
+prefixed = prefixed.replace('\n', '\n' + indent + indent_characters)  
+We finish the method up by using the original beginning and trailing white space to ensure the new prefixed CSS fits exactly in place of the original.
+view plaincopy to clipboardprint?
+match = re.search('^(\s*)', original)  
+prefix = match.groups()[0]  
+match = re.search('(\s*)\Z', original)  
+suffix = match.groups()[0]  
+  
+return (prefix, prefixed, suffix)  
+With the fix_whitespace() method we used the Python regular expression (re)module, so we need to add it to the list of imports at the top of the script.
+view plaincopy to clipboardprint?
+import re  
+And with this, we’ve completed the process of writing the prefixr command.The next step it to make the command easy to run by providing a keyboard shortcut and a menu entry.
+Step 10 - Key Bindings
+Most of the settings and modifications that can be made to Sublime are done via JSON files, and this is true for key bindings. Key bindings are usually OS-specific, which means that three key bindings files will need to be created for your plugin. The files should be named Default (Windows).sublime-keymap, Default (Linux).sublime-keymap and Default (OSX).sublime-keymap.
+Prefixr/  
+...  
+- Default (Linux).sublime-keymap  
+- Default (OSX).sublime-keymap  
+- Default (Windows).sublime-keymap  
+- Prefixr.py  
+The .sublime-keymap files contain a JSON array that contains JSON objects to specify the key bindings. The JSON objects must contain a keys and command key, and may also contain a args key if the command requires arguments. The hardest part about picking a key binding is to ensure the key binding is not already used. This can be done by going to the Preferences > Key Bindings – Default menu entry and searching for the keybinding you wish to use. Once you’ve found a suitably unused binding, add it to your .sublime-keymap files.
+view plaincopy to clipboardprint?
+[  
+    {   
+        "keys": ["ctrl+alt+x"], "command": "prefixr"   
+    }  
+]  
+Normally the Linux and Windows key bindings are the same. The cmd key on OS Xis specified by the string super in the .sublime-keymap files. When porting a key binding across OSes, it is common for the ctrl key onWindows and Linux to be swapped out for super on OS X. This may not, however, always be the most natural hand movement, so if possible try and test your keybindings out on a real keyboard.
+Step 11 - Menu Entries
+One of the cooler things about extending Sublime is that it is possible to add items to the menu structure by creating .sublime-menu files. Menufiles must be named specific names to indicate what menu they affect:
+Main.sublime-menu controls the main program menu
+Side Bar.sublime-menu controls the right-click menu on a file or folder in the sidebar
+Context.sublime-menu controls the right-click menu on a file being edited
+There are a whole handful of other menu files that affect various other menus throughout the interface. Browsing through the Default package is the easiest way to learn about all of these.
+For Prefixr we want to add a menu item to the Edit menu and some entries to the Preferences menu for settings. The following example is the JSON structure for the Edit menu entry. I’ve omitted the entries for the Preferences menu since they are fairly verbose being nested a few levels deep.
+view plaincopy to clipboardprint?
+[  
+{  
+    "id": "edit",  
+    "children":  
+    [  
+        {"id": "wrap"},  
+        { "command": "prefixr" }  
+    ]  
+}  
+]  
+The one piece to pay attention to is the id keys. By specifying the idof an existing menu entry, it is possible to append an entry without redefining the existing structure. If you open the Main.sublime-menu file from the Default package and browse around, you can determine what idyou want to add your entry to.
+At this point your Prefixr package should look almost identical to the official version on GitHub.
+Step 12 - Distributing Your Package
+Now that you’ve taken the time to write a useful Sublime plugin, it is time to get into the hand of other users.
+Sublime supports distributing a zip file of a package directory as a simple way to share packages. Simply zip your package folder and change the extension to .sublime-package. Other users may now place this into their Installed Packages directory and restart Sublime to install the package.
+Along with easy availability to lots of users, having your package available via Package Control ensures users get upgraded automatically to your latest updates.
+While this can certainly work, there is also a package manager forSublime called Package Controlthat supports a master list of packages and automatic upgrades. To get your package added to the default channel, simply host it on GitHubor BitBucket and then fork the channel file (on GitHub, or BitBucket), add your repository and send a pull request. Once the pull request is accepted, your package will be available to thousands of users using Sublime. Along with easy availability to lots of users, having your package available via Package Control ensures users get upgraded automatically to your latest updates.
+If you don’t want to host on GitHub or BitBucket, there is a customJSON channel/repository system that can be used to host anywhere, while still providing the package to all users. It also provides advanced functionality like specifying the availability of packages by OS. See the PackageControl page for more details.
+Go Write Some Plugins!
+Now that we’ve covered the steps to write a Sublime plugin, it is time for you to dive in! The Sublime plugin community is creating and publishing new functionality almost every day. With each release, Sublime becomes more and more powerful and versatile. The Sublime Text Forum is a great place to get help and talk with others about what you are building.
+
+Tags:sublime text 
+Enjoyed this Post?
+Subscribe to our RSS Feed, Follow us on Twitter or simply recommend us to friends and colleagues!
+ 
+By Will Bond
+Rollover to read this author's bio or click through to see a full list of posts by this author.
+
+Plus Premium
+Premium Members
+Source Files, Bonus Tutorials & More for all relevant Tuts+ sites in one subscription. Join Now
+  
+  
+Note: Want to add some source code? Type <pre><code> before it and </code></pre> after it. Find out more
+
+Twitter
+91,511Twitter Followers
+Facebook
+78,881Facebook Fans
+Google+
+21,809Google+ Followers
+ 
+ Get Email Updates Subscribe via RSS
+ 
+Full-time, Part-time and Contract Jobs
+Icon Designer
+Art Director at Credera
+Web Developer at Eurolink
+ThemeForest Senior Reviewer at Envato
+CodeCanyon Reviewer at Envato
+More on Tuts+ Jobs...
+Freelance Jobs
+Senior Front-End Web Developer (HTML5/CSS3/WordPress/JQuery/AJAX) in Anywhere
+Senior Developer (Full-Time/Oniste) in Nashville, TN
+Cake PHP programmer needed in Anywhere preferably Europe/Easter Europe
+Store data transfer from VirtueMart to Magento in USA
+WordPress / Shopify / WooCommerce Customization Legend in Anywhere
+More Freelance Jobs...
+ Facebook Twitter Google+
+Nettuts+ is part of the Tuts+ Network, teaching creative skills to millions worldwide.
+Advertise·Suggestions·About Us·Terms and Conditions·Privacy Policy·Write for UsNettuts+
+Copyright © 2013 Envato
+Envato
+envatosupportcommunity
+This ad is supporting your extension Bookmark Sentry: More info | Privacy Policy | Hide on this page
